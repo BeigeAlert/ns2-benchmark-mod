@@ -24,19 +24,17 @@ local kRecordingIconBaseScale = 0.75
 local kBufferIdxTime = 1
 local kBufferIdxPosition = 2
 local kBufferIdxAngles = 3
+local kBufferIdxFOV = 4
 
-Log("Added console command \"bench_record_start\"")
-Event.Hook("Console_bench_record_start", function()
+local kBenchmarkFileExt = ".ns2_benchmark"
+
+Log("Added console command \"bench_record\"")
+Event.Hook("Console_bench_record", function()
     Benchmark_BeginRecording()
 end)
 
-Log("Added console command \"bench_record_stop\"")
-Event.Hook("Console_bench_record_stop", function()
-    Benchmark_EndRecording()
-end)
-
-Log("Added console command \"bench_record_save\"")
-Event.Hook("Console_bench_record_save", function(fileName, ...)
+Log("Added console command \"bench_save\"")
+Event.Hook("Console_bench_save", function(fileName, ...)
     
     local args = {...}
     if #args > 0 then
@@ -45,11 +43,28 @@ Event.Hook("Console_bench_record_save", function(fileName, ...)
     end
     
     if fileName == nil then
-        Log("Usage: bench_record_save file-name-without-spaces-or-extension")
+        Log("Usage: bench_save file-name-without-spaces-or-extension")
         return
     end
     
     Benchmark_SaveRecording(fileName)
+end)
+
+Log("Added console command \"bench_load\"")
+Event.Hook("Console_bench_load", function(fileName, ...)
+    
+    local args = {...}
+    if #args > 0 then
+        Log("Error: file name cannot contain spaces!")
+        return
+    end
+    
+    if fileName == nil then
+        Log("Usage: bench_load file-name-without-spaces-or-extension")
+        return
+    end
+    
+    Benchmark_LoadRecording(fileName)
 end)
 
 Log("Added console command \"bench_play\"")
@@ -59,7 +74,13 @@ end)
 
 Log("Added console command \"bench_stop\"")
 Event.Hook("Console_bench_stop", function()
-    Benchmark_StopPlaying()
+
+    if Benchmark_GetIsPlaying() then
+        Benchmark_StopPlaying()
+    elseif Benchmark_GetIsRecording() then
+        Benchmark_EndRecording()
+    end
+    
 end)
 
 function Benchmark_GetIsRecording()
@@ -71,7 +92,7 @@ function Benchmark_GetIsPlaying()
 end
 
 local buffer = {}
-local function ClearBuffer()
+local function Buffer_Clear()
     buffer = {}
     buffer.currentRecordingIndex = 0 -- last index written (if playing back, this is the size)
     buffer.currentPlaybackIndex = 0
@@ -81,17 +102,18 @@ function Benchmark_HasRecordedData()
     return buffer.currentRecordingIndex > 0
 end
 
-local function GetNewEmptyBufferEntry()
+local function Buffer_GetNewEmptyEntry()
     local newEntry = {}
     
     newEntry[kBufferIdxTime] = 0
     newEntry[kBufferIdxPosition] = Vector()
     newEntry[kBufferIdxAngles] = Angles()
+    newEntry[kBufferIdxFOV] = 0
     
     return newEntry
 end
 
-local function GetBufferEntryAsListOfPrimitives(entry)
+local function Buffer_GetEntryAsListOfPrimitives(entry)
     
     local list = {}
     
@@ -105,7 +127,31 @@ local function GetBufferEntryAsListOfPrimitives(entry)
     list[6] = entry[kBufferIdxAngles].yaw
     list[7] = entry[kBufferIdxAngles].roll
     
+    list[8] = entry[kBufferIdxFOV]
+    
     return list
+    
+end
+
+local function Buffer_GetListOfPrimitivesAsBufferEntry(list)
+    
+    local entry = {}
+    
+    entry[kBufferIdxTime] = list[1]
+    
+    entry[kBufferIdxPosition] = Vector()
+    entry[kBufferIdxPosition].x = list[2]
+    entry[kBufferIdxPosition].y = list[3]
+    entry[kBufferIdxPosition].z = list[4]
+    
+    entry[kBufferIdxAngles] = Angles()
+    entry[kBufferIdxAngles].pitch = list[5]
+    entry[kBufferIdxAngles].yaw   = list[6]
+    entry[kBufferIdxAngles].roll  = list[7]
+    
+    entry[kBufferIdxFOV] = list[8]
+    
+    return entry
     
 end
 
@@ -133,6 +179,10 @@ local function Buffer_GetEntryAngles(entry)
     return entry[kBufferIdxAngles]
 end
 
+local function Buffer_GetEntryFOV(entry)
+    return entry[kBufferIdxFOV]
+end
+
 local function Buffer_GetIsPlaybackAtBeginning()
     return buffer.currentPlaybackIndex == 1
 end
@@ -153,6 +203,10 @@ local function Buffer_SetEntryAngles(entry, angles)
     entry[kBufferIdxAngles] = angles
 end
 
+local function Buffer_SetEntryFOV(entry, fov)
+    entry[kBufferIdxFOV] = fov
+end
+
 -- Can return nil on the first frame!!!
 local function GetNewestBufferEntry()
     return buffer[buffer.currentRecordingIndex]
@@ -168,7 +222,7 @@ local function ResizeBuffer(newSize)
     
     local oldSize = #buffer
     for i=oldSize + 1, newSize do
-        buffer[i] = GetNewEmptyBufferEntry()
+        buffer[i] = Buffer_GetNewEmptyEntry()
     end
     
 end
@@ -191,7 +245,7 @@ local function SetupBufferForRecording()
     
     -- Try to get all of our GC hitches out of the way up front so they don't impact the
     -- benchmark.
-    ClearBuffer()
+    Buffer_Clear()
     ResizeBuffer(kRecordingFPS * kInitialReservationRecordingTime)
     
 end
@@ -281,19 +335,74 @@ function Benchmark_SaveRecording(fileName)
         return
     end
     
+    if Benchmark_GetIsPlaying() then
+        Log("Error: Cannot save while playing.")
+        return
+    end
+    
+    if not Benchmark_HasRecordedData() then
+        Log("Error: No recorded data to save.")
+        return
+    end
+    
     -- Need to unpack the data into a regular table (no c types, json doesn't know how to deal with
     -- these!)
     local output = {}
     for i=1, buffer.currentRecordingIndex do
-        output[i] = GetBufferEntryAsListOfPrimitives(buffer[i])
+        output[i] = Buffer_GetEntryAsListOfPrimitives(buffer[i])
     end
     
-    local realFileName = "config://"..fileName..".ns2_benchmark"
+    local realFileName = "config://"..fileName..kBenchmarkFileExt
     local writingFile = io.open(realFileName, "w+")
     writingFile:write(json.encode(output))
     io.close(writingFile)
     Log("Benchmark recording saved to \"%s\".", realFileName)
 
+end
+
+function Benchmark_LoadRecording(fileName)
+    
+    if Benchmark_GetIsRecording() then
+        Log("Error: Cannot load while recording.")
+        return
+    end
+    
+    if Benchmark_GetIsPlaying() then
+        Log("Error: Cannot load while playing.")
+        return
+    end
+    
+    -- Try to load from a special game directory (eg for benchmarks that ship with the game).
+    local realFileName = "benchmarks/"..fileName..kBenchmarkFileExt
+    if not GetFileExists(realFileName) then
+        realFileName = "config://"..fileName..kBenchmarkFileExt
+        if not GetFileExists(realFileName) then
+            Log("Error: Cannot find benchmark file \"%s\".", fileName)
+            return
+        end
+    end
+    
+    local readingFile = io.open(realFileName, "r")
+    if readingFile == nil then
+        -- Unable to open it.  Spark has already printed an error message about this.
+        return
+    end
+    
+    local decoded, _, errStr = json.decode(readingFile:read("*all"))
+    io.close(readingFile)
+    if errStr then
+        Log("Error when reading file: \"%s\"", errStr)
+        return
+    end
+    
+    -- Unpack the buffer
+    Buffer_Clear()
+    buffer.currentRecordingIndex = #decoded
+    for i=1, #decoded do
+        buffer[i] = Buffer_GetListOfPrimitivesAsBufferEntry(decoded[i])
+    end
+    Log("Benchmark recording loaded from \"%s\".", fileName)
+    
 end
 
 function Benchmark_RecordFrame(time)
@@ -323,6 +432,19 @@ function Benchmark_RecordFrame(time)
     Buffer_SetEntryTimestamp(bufferEntry, time)
     Buffer_SetEntryPosition(bufferEntry, cameraCoords.origin)
     Buffer_SetEntryAngles(bufferEntry, angles)
+    Buffer_SetEntryFOV(bufferEntry, Client.GetEffectiveFov(player))
+    
+end
+
+local overrideFOV = 1
+local old_Client_GetEffectiveFov = Client.GetEffectiveFov
+function Client.GetEffectiveFov(player)
+    
+    if Benchmark_GetIsPlaying() then
+        return overrideFOV
+    end
+    
+    return (old_Client_GetEffectiveFov(player))
     
 end
 
@@ -368,16 +490,20 @@ function Benchmark_GetPlaybackFrameCameraCoords(time)
     local rightPos = Buffer_GetEntryPosition(rightEntry)
     local leftAngles = Buffer_GetEntryAngles(leftEntry)
     local rightAngles = Buffer_GetEntryAngles(rightEntry)
+    local leftFOV = Buffer_GetEntryFOV(leftEntry)
+    local rightFOV = Buffer_GetEntryFOV(rightEntry)
     
     if timeFrac == 0 then
         local newCameraCoords = leftAngles:GetCoords()
         newCameraCoords.origin = leftPos
+        overrideFOV = leftFOV
         return newCameraCoords
     
     elseif timeFrac == 1 then
         local newCameraCoords = rightAngles:GetCoords()
         newCameraCoords.origin = rightPos
-        return newCameraCoords
+        overrideFOV = rightFOV
+        return newCameraCoords, rightFOV
         
     end
     
@@ -389,22 +515,11 @@ function Benchmark_GetPlaybackFrameCameraCoords(time)
     -- Can't really get around garbage creation here... :(
     lerpedAngles = Angles.Lerp(leftAngles, rightAngles, timeFrac)
     
+    -- Set the FOV to be picked up again by Client.GetEffectiveFov()
+    overrideFOV = leftFOV * (1.0 - timeFrac) + rightFOV * timeFrac
+    
     local newCameraCoords = lerpedAngles:GetCoords()
     newCameraCoords.origin = lerpedPosition
-    
-    -- DEBUG
-    debugFrameNumber = debugFrameNumber + 1
-    Log("==============================================================")
-    Log("    frameNumber = %s", debugFrameNumber)
-    Log("    currentPlaybackIndex = %s", buffer.currentPlaybackIndex)
-    Log("    time = %s", time)
-    Log("    timeFrac = %s", timeFrac)
-    Log("    leftTime = %s", leftTime)
-    Log("    rightTime = %s", rightTime)
-    Log("    rightTime - leftTime = %s", rightTime - leftTime)
-    Log("    leftPos = %s", string.format("{%.4f, %.4f, %.4f}", leftPos.x, leftPos.y, leftPos.z))
-    Log("    rightPos = %s", string.format("{%.4f, %.4f, %.4f}", rightPos.x, rightPos.y, rightPos.z))
-    Log("    lerpedPosition = %s", string.format("{%.4f, %.4f, %.4f}", lerpedPosition.x, lerpedPosition.y, lerpedPosition.z))
     
     return newCameraCoords
     
