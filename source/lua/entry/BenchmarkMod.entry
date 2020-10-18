@@ -1,0 +1,7 @@
+modEntry = {
+    Client = "lua/BenchClient.lua",
+    --Server = "lua/BenchServer.lua",
+    --Shared = "lua/BenchShared.lua",
+    --FileHooks = "lua/BenchHooks.lua",
+    Priority = 1
+}

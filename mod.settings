@@ -1,0 +1,7 @@
+name        = "Benchmark Mod"
+source_dir  = "source/"
+output_dir  = "output/"
+description = [=[Benchmark Mod]=]
+image       = "preview.jpg"
+tag_modtype = "Tool"
+tag_support = ""
