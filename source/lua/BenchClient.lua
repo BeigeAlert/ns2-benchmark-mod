@@ -243,11 +243,8 @@ local function GetTimeForBenchmark()
     return (Shared.GetSystemTimeReal())
 end
 
-local recordingStartTimeReal = 0
+local recordingStartTime = 0
 function Benchmark_BeginRecording()
-    
-    -- Ensure some hooks are setup (function does nothing if it's already hooked up)
-    Benchmark_SetupLateHooks()
     
     if Benchmark_GetIsRecording() then
         Log("Benchmark is already recording!")
@@ -256,7 +253,7 @@ function Benchmark_BeginRecording()
     
     CreateRecordingIcon()
     SetupBufferForRecording()
-    recordingStartTimeReal = GetTimeForBenchmark()
+    recordingStartTime = GetTimeForBenchmark()
     isRecording = true
     
     Log("Beginning recording...")
@@ -299,12 +296,24 @@ function Benchmark_SaveRecording(fileName)
 
 end
 
-function Benchmark_RecordFrame(player, cameraCoords, time)
+function Benchmark_RecordFrame(time)
     
     local lastEntry = GetNewestBufferEntry()
     local lastRecordedFrameTime = lastEntry and Buffer_GetEntryTimestamp(lastEntry) or -999
     if time - lastRecordedFrameTime < kRecordingTimeInterval then
         return -- not enough time has passed yet to record another frame
+    end
+    
+    local player = Client.GetLocalPlayer()
+    if player == nil then
+        Log("Warning!  Got nil player when recording frame!")
+        return
+    end
+    
+    local cameraCoords = player.GetCameraViewCoords and player:GetCameraViewCoords(true)
+    if cameraCoords == nil then
+        Log("Warning!  Unable to get camera view coords when recording frame!")
+        return
     end
     
     local angles = Angles()
@@ -317,12 +326,12 @@ function Benchmark_RecordFrame(player, cameraCoords, time)
     
 end
 
-local playbackStartTimeReal = 0
+local playbackStartTime = 0
 local serverNeedsPositionUpdate = false
 local lerpedPosition = Vector()
 local lerpedAngles = Angles()
 local debugFrameNumber = 0
-function Benchmark_PlaybackFrame(player, cameraCoords, time)
+function Benchmark_GetPlaybackFrameCameraCoords(time)
     
     -- Find the buffer entries that bracket the current timestamp.  This just means we advance until
     -- we find a timestamp that's ahead of our current time.  Then we just use this entry and the
@@ -403,10 +412,8 @@ end
 
 function Benchmark_GetCameraViewCoordsOverride(player, cameraCoords)
     
-    if Benchmark_GetIsRecording() then
-        Benchmark_RecordFrame(player, cameraCoords, GetTimeForBenchmark() - recordingStartTimeReal)
-    elseif Benchmark_GetIsPlaying() then
-        return (Benchmark_PlaybackFrame(player, cameraCoords, GetTimeForBenchmark() - playbackStartTimeReal))
+    if Benchmark_GetIsPlaying() then
+        return (Benchmark_GetPlaybackFrameCameraCoords(GetTimeForBenchmark() - playbackStartTime))
     end
     
 end
@@ -426,7 +433,7 @@ function Benchmark_Play()
     Log("Playing back the buffered camera move")
     
     isPlaying = true
-    playbackStartTimeReal = GetTimeForBenchmark()
+    playbackStartTime = GetTimeForBenchmark()
     buffer.currentPlaybackIndex = 1
     debugFrameNumber = 0
     
@@ -444,22 +451,10 @@ function Benchmark_StopPlaying()
     
 end
 
-function Benchmark_SetupLateHooks()
+Event.Hook("UpdateRender", function()
     
-    -- Can't hook into CameraHolderMixin, since that's loaded too early.
-    Log("Hooking CameraHolderMixin:GetCameraViewCoords...")
-    local old_CameraHolderMixin_GetCameraViewCoords = CameraHolderMixin.GetCameraViewCoords
-    CameraHolderMixin.GetCameraViewCoords = function(self, forRendering)
-        
-        -- UGH!  This parameter should be passed to the GetCameraViewCoordsOverride... but it's not...
-        -- so we need to intercept every call to this function, and inform Benchmark ahead of time if
-        -- it's coming... :(
-        Benchmark_SetGetCameraViewCoordsForRenderingIncoming(forRendering)
-        
-        return (old_CameraHolderMixin_GetCameraViewCoords(self, forRendering))
-    
+    if Benchmark_GetIsRecording() then
+        Benchmark_RecordFrame(GetTimeForBenchmark() - recordingStartTime)
     end
     
-    -- Wipe it out
-    Benchmark_SetupLateHooks = function() end
-end
+end)
