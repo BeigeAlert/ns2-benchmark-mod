@@ -11,15 +11,17 @@
 Log("===================================================== BENCHMARK MOD =========================================")
 
 Log("Loaded BenchClient.lua")
-local isRecording = false
-local isPlaying = false
+local benchmarkStatus = "ejected"
 
 local kRecordingIconTexture = PrecacheAsset("ui/benchmark_recording_icon.dds")
+local kPlayingIconTexture = PrecacheAsset("ui/benchmark_playing_icon.dds")
+local kPausedIconTexture = PrecacheAsset("ui/benchmark_paused_icon.dds")
+local kEjectedIconTexture = PrecacheAsset("ui/benchmark_ejected_icon.dds")
 
 local kRecordingFPS = 60 -- even THIS is probably too high...
 local kRecordingTimeInterval = 1.0 / kRecordingFPS
 local kInitialReservationRecordingTime = 5 * 60 -- 5 minutes is probably very excessive...
-local kRecordingIconBaseScale = 0.75
+local kstatusIconBaseScale = 0.75
 
 local kBufferIdxTime = 1
 local kBufferIdxPosition = 2
@@ -84,11 +86,11 @@ Event.Hook("Console_bench_stop", function()
 end)
 
 function Benchmark_GetIsRecording()
-    return isRecording == true
+    return benchmarkStatus == "recording"
 end
 
 function Benchmark_GetIsPlaying()
-    return isPlaying == true
+    return benchmarkStatus == "playing"
 end
 
 local buffer = {}
@@ -96,6 +98,7 @@ local function Buffer_Clear()
     buffer = {}
     buffer.currentRecordingIndex = 0 -- last index written (if playing back, this is the size)
     buffer.currentPlaybackIndex = 0
+    Benchmark_SetStatus("ejected")
 end
 
 function Benchmark_HasRecordedData()
@@ -250,46 +253,63 @@ local function SetupBufferForRecording()
     
 end
 
-local recordingIcon = nil
-local function CreateRecordingIcon()
+function Benchmark_GetStatus()
+    return benchmarkStatus
+end
+
+function Benchmark_SetStatus(status)
+    benchmarkStatus = status
+    GetGlobalEventDispatcher():FireEvent("BenchmarkStatusChanged")
+end
+
+local statusIcon = nil
+function Benchmark_CreateStatusIcon()
     
-    if recordingIcon ~= nil then
+    if statusIcon ~= nil then
         return -- already created
     end
     
-    recordingIcon = CreateGUIObject("RecordingIcon", GUIObject, nil)
-    recordingIcon:AlignTopRight()
-    recordingIcon:SetPosition(-64, 64, 0)
-    recordingIcon:SetTexture(kRecordingIconTexture)
-    recordingIcon:SetSizeFromTexture()
-    recordingIcon:SetColor(1, 1, 1, 1)
+    statusIcon = CreateGUIObject("statusIcon", GUIObject, nil)
+    statusIcon:AlignTopRight()
+    statusIcon:SetPosition(-64, 64, 0)
+    statusIcon:SetTexture(kEjectedIconTexture)
+    statusIcon:SetSizeFromTexture()
+    statusIcon:SetColor(1, 1, 1, 1)
     
     -- Make it scale with screen resolution
     local function UpdateScale(self)
-        local scale = kRecordingIconBaseScale * Client.GetScreenHeight() / 1080
+        local scale = kstatusIconBaseScale * Client.GetScreenHeight() / 1080
         self:SetScale(scale, scale)
     end
-    UpdateScale(recordingIcon)
-    recordingIcon:HookEvent(GetGlobalEventDispatcher(), "OnResolutionChanged", UpdateScale)
+    UpdateScale(statusIcon)
+    statusIcon:HookEvent(GetGlobalEventDispatcher(), "OnResolutionChanged", UpdateScale)
     
-    -- Make it blink on and off every second
-    recordingIcon:AnimateProperty("Visible", nil,
-    {
-        func = function(obj, time, params, currentValue, startValue, endValue, startTime)
-            return time % 1.5 <= 0.75, false
-        end,
-    })
+    -- Update icon whenever benchmark status changes.
+    local function UpdateStatus(self)
+        local status = Benchmark_GetStatus()
+        if status == "recording" then
+            statusIcon:SetTexture(kRecordingIconTexture)
+        elseif status == "playing" then
+            statusIcon:SetTexture(kPlayingIconTexture)
+        elseif status == "ejected" then
+            statusIcon:SetTexture(kEjectedIconTexture)
+        elseif status == "paused" then
+            statusIcon:SetTexture(kPausedIconTexture)
+        end
+    end
+    UpdateStatus(statusIcon)
+    statusIcon:HookEvent(GetGlobalEventDispatcher(), "BenchmarkStatusChanged", UpdateStatus)
     
 end
 
-local function DestroyRecordingIcon()
+function Benchmark_DestroyStatusIcon()
 
-    if recordingIcon == nil then
+    if statusIcon == nil then
         return -- already doesn't exist
     end
     
-    recordingIcon:Destroy()
-    recordingIcon = nil
+    statusIcon:Destroy()
+    statusIcon = nil
 
 end
 
@@ -305,10 +325,9 @@ function Benchmark_BeginRecording()
         return
     end
     
-    CreateRecordingIcon()
     SetupBufferForRecording()
     recordingStartTime = GetTimeForBenchmark()
-    isRecording = true
+    Benchmark_SetStatus("recording")
     
     Log("Beginning recording...")
     
@@ -321,8 +340,7 @@ function Benchmark_EndRecording()
         return
     end
     
-    DestroyRecordingIcon()
-    isRecording = false
+    Benchmark_SetStatus("paused")
     
     Log("Recording ended.")
     
@@ -449,7 +467,6 @@ function Client.GetEffectiveFov(player)
 end
 
 local playbackStartTime = 0
-local serverNeedsPositionUpdate = false
 local lerpedPosition = Vector()
 local lerpedAngles = Angles()
 local debugFrameNumber = 0
@@ -462,7 +479,6 @@ function Benchmark_GetPlaybackFrameCameraCoords(time)
           not Buffer_GetIsPlaybackAtEnd() do
         
         Buffer_AdvancePlaybackToNextEntry()
-        serverNeedsPositionUpdate = true -- probably have a different position now
     end
     
     local leftEntry = Buffer_GetPreviousPlaybackEntry()
@@ -547,7 +563,7 @@ function Benchmark_Play()
     
     Log("Playing back the buffered camera move")
     
-    isPlaying = true
+    Benchmark_SetStatus("playing")
     playbackStartTime = GetTimeForBenchmark()
     buffer.currentPlaybackIndex = 1
     debugFrameNumber = 0
@@ -562,7 +578,7 @@ function Benchmark_StopPlaying()
     end
     
     Log("Playback stopped.")
-    isPlaying = false
+    Benchmark_SetStatus("paused")
     
 end
 
@@ -571,5 +587,11 @@ Event.Hook("UpdateRender", function()
     if Benchmark_GetIsRecording() then
         Benchmark_RecordFrame(GetTimeForBenchmark() - recordingStartTime)
     end
+    
+end)
+
+Event.Hook("LoadComplete", function()
+    
+    Benchmark_CreateStatusIcon()
     
 end)
