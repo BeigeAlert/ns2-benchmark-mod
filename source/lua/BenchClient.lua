@@ -259,7 +259,19 @@ end
 
 function Benchmark_SetStatus(status)
     benchmarkStatus = status
-    GetGlobalEventDispatcher():FireEvent("BenchmarkStatusChanged")
+    GetGlobalEventDispatcher():FireEvent("OnBenchmarkStatusChanged")
+end
+
+function Benchmark_GetPlaybackProgressFraction()
+    if Benchmark_GetIsPlaying() then
+        return (math.min(math.max(0, buffer.currentPlaybackIndex / math.max(1, buffer.currentRecordingIndex)), 1))
+    else
+        return 0
+    end
+end
+
+local function FireProgressChangeEvent()
+    GetGlobalEventDispatcher():FireEvent("OnBenchmarkProgressChanged")
 end
 
 local statusIcon = nil
@@ -298,7 +310,54 @@ function Benchmark_CreateStatusIcon()
         end
     end
     UpdateStatus(statusIcon)
-    statusIcon:HookEvent(GetGlobalEventDispatcher(), "BenchmarkStatusChanged", UpdateStatus)
+    statusIcon:HookEvent(GetGlobalEventDispatcher(), "OnBenchmarkStatusChanged", UpdateStatus)
+    
+end
+
+local playbackBar = nil
+function Benchmark_CreatePlaybackBar()
+    
+    if playbackBar ~= nil then
+        return
+    end
+    
+    playbackBar = CreateGUIObject("barBackground", GUIObject, nil)
+    playbackBar:SetSize(1000, 50)
+    playbackBar:AlignTop()
+    playbackBar:SetColor(0, 0, 0, 0.75)
+    
+    -- Scale and position based on resolution.
+    local function UpdateLayout(self)
+        local scale = Client.GetScreenHeight() / 900
+        self:SetScale(scale, scale)
+        self:SetPosition(0, scale * 60)
+    end
+    UpdateLayout(playbackBar)
+    playbackBar:HookEvent(GetGlobalEventDispatcher(), "OnResolutionChanged", UpdateLayout)
+    
+    local progressBar = CreateGUIObject("progressBar", GUIObject, playbackBar)
+    progressBar:SetColor(1, 1, 1, 1)
+    progressBar:SetSize(10, 50)
+    
+    -- Position progress bar based on playback fraction.
+    local function UpdateProgress(self)
+        local progress = Benchmark_GetPlaybackProgressFraction()
+        self:SetHotSpot(progress, 0.5)
+        self:SetAnchor(progress, 0.5)
+    end
+    UpdateProgress(progressBar)
+    progressBar:HookEvent(GetGlobalEventDispatcher(), "OnBenchmarkProgressChanged", UpdateProgress)
+    
+end
+
+function Benchmark_DestroyPlaybackBar()
+    
+    if playbackBar == nil then
+        return
+    end
+    
+    playbackBar:Destroy()
+    playbackBar = nil
     
 end
 
@@ -481,6 +540,8 @@ function Benchmark_GetPlaybackFrameCameraCoords(time)
         Buffer_AdvancePlaybackToNextEntry()
     end
     
+    FireProgressChangeEvent()
+    
     local leftEntry = Buffer_GetPreviousPlaybackEntry()
     local rightEntry = Buffer_GetCurrentPlaybackEntry()
     
@@ -566,6 +627,7 @@ function Benchmark_Play()
     Benchmark_SetStatus("playing")
     playbackStartTime = GetTimeForBenchmark()
     buffer.currentPlaybackIndex = 1
+    FireProgressChangeEvent()
     debugFrameNumber = 0
     
 end
@@ -582,6 +644,28 @@ function Benchmark_StopPlaying()
     
 end
 
+local function SetupPlaybackBar()
+    
+    -- Set it up so the playback bar will be created when we start playback, and destroyed when we
+    -- end playback.
+    
+    local function UpdatePlaybackBarLifetime()
+    
+        -- Only show the playback bar when we are playing-back!
+        -- (These are safe to call multiple times.  There won't be more than one playback bar.)
+        if Benchmark_GetStatus() == "playing" then
+            Benchmark_CreatePlaybackBar()
+        else
+            Benchmark_DestroyPlaybackBar()
+        end
+        
+    end
+    UpdatePlaybackBarLifetime()
+    local ged = GetGlobalEventDispatcher()
+    ged:HookEvent(ged, "OnBenchmarkStatusChanged", UpdatePlaybackBarLifetime)
+    
+end
+
 Event.Hook("UpdateRender", function()
     
     if Benchmark_GetIsRecording() then
@@ -593,5 +677,6 @@ end)
 Event.Hook("LoadComplete", function()
     
     Benchmark_CreateStatusIcon()
+    SetupPlaybackBar()
     
 end)
