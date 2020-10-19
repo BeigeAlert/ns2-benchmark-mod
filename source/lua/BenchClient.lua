@@ -106,6 +106,60 @@ Event.Hook("Console_bench_list", function()
     
 end)
 
+local benchmarkData = {}
+benchmarkData.minFPS = 99999
+benchmarkData.maxFPS = 0
+benchmarkData.avgFPS = 0
+benchmarkData.totalFrameCount = 0
+benchmarkData.playbackStartTime = 0
+benchmarkData.playbackEndTime = 0
+local lastFrameTime = -1
+function BenchmarkData_RecordFrameTimeDelta()
+    
+    local now = Benchmark_GetTime()
+    
+    if lastFrameTime >= 0 then
+        
+        local deltaTime = now - lastFrameTime
+        local fps = 1.0 / math.max(0.001, deltaTime)
+    
+        benchmarkData.totalFrameCount = benchmarkData.totalFrameCount + 1
+        
+        benchmarkData.minFPS = math.min(benchmarkData.minFPS, fps)
+        benchmarkData.maxFPS = math.max(benchmarkData.maxFPS, fps)
+        
+        benchmarkData.playbackEndTime = Benchmark_GetTime()
+        local totalTime = math.max(0, benchmarkData.playbackEndTime - benchmarkData.playbackStartTime)
+        if totalTime > 0 then
+            benchmarkData.avgFPS = benchmarkData.totalFrameCount / totalTime
+        else
+            benchmarkData.avgFPS = 0
+        end
+        
+    end
+    
+    lastFrameTime = now
+    
+end
+
+function BenchmarkData_BeginBenchmark()
+    
+    lastFrameTime = -1
+    benchmarkData.minFPS = 99999
+    benchmarkData.maxFPS = 0
+    benchmarkData.avgFPS = 0
+    benchmarkData.totalFrameCount = 0
+    benchmarkData.playbackStartTime = Benchmark_GetTime()
+    benchmarkData.playbackEndTime = 0
+    
+end
+
+function BenchmarkData_GetData()
+    
+    return benchmarkData
+    
+end
+
 function Benchmark_GetListsOfRecordingNames()
     
     local appDataRecordings = {}
@@ -405,7 +459,7 @@ function Benchmark_DestroyStatusIcon()
 
 end
 
-local function GetTimeForBenchmark()
+function Benchmark_GetTime()
     return (Shared.GetSystemTimeReal())
 end
 
@@ -418,8 +472,9 @@ function Benchmark_BeginRecording()
     end
     
     SetupBufferForRecording()
-    recordingStartTime = GetTimeForBenchmark()
+    recordingStartTime = Benchmark_GetTime()
     Benchmark_SetStatus("recording")
+    Benchmark_DestroyResults()
     
     Log("Beginning recording...")
     
@@ -561,7 +616,6 @@ end
 local playbackStartTime = 0
 local lerpedPosition = Vector()
 local lerpedAngles = Angles()
-local debugFrameNumber = 0
 function Benchmark_GetPlaybackFrameCameraCoords(time)
     
     -- Find the buffer entries that bracket the current timestamp.  This just means we advance until
@@ -638,7 +692,7 @@ end
 function Benchmark_GetCameraViewCoordsOverride(player, cameraCoords)
     
     if Benchmark_GetIsPlaying() then
-        return (Benchmark_GetPlaybackFrameCameraCoords(GetTimeForBenchmark() - playbackStartTime))
+        return (Benchmark_GetPlaybackFrameCameraCoords(Benchmark_GetTime() - playbackStartTime))
     end
     
 end
@@ -658,10 +712,12 @@ function Benchmark_Play()
     Log("Playing back the buffered camera move")
     
     Benchmark_SetStatus("playing")
-    playbackStartTime = GetTimeForBenchmark()
+    playbackStartTime = Benchmark_GetTime()
     buffer.currentPlaybackIndex = 1
     FireProgressChangeEvent()
-    debugFrameNumber = 0
+    BenchmarkData_BeginBenchmark()
+    Benchmark_DestroyResults() -- Hide results from last test, if any
+    Shared.ConsoleCommand("maxfps 1000") -- so we don't get capped off
     
 end
 
@@ -675,6 +731,70 @@ function Benchmark_StopPlaying()
     Log("Playback stopped.")
     Benchmark_SetStatus("paused")
     
+end
+
+local resultsRootObj = nil
+function Benchmark_DisplayResults()
+
+    local resultsTbl = BenchmarkData_GetData()
+
+    if resultsRootObj == nil then
+        
+        -- Create backgroundObj to hold it all
+        resultsRootObj = CreateGUIObject("resultsBack", GUIObject, nil)
+        resultsRootObj:SetSize(1600, 900)
+        resultsRootObj:AlignTop()
+        local function UpdateRootScale(self)
+            local scale = Client.GetScreenHeight() / 900
+            self:SetScale(scale, scale)
+        end
+        UpdateRootScale(resultsRootObj)
+        resultsRootObj:HookEvent(GetGlobalEventDispatcher(), "OnResolutionChanged", UpdateRootScale)
+        
+        -- Create title
+        local titleObj = CreateGUIObject("titleObj", GUIText, resultsRootObj)
+        titleObj:SetFontFamily("MicrogrammaBold")
+        titleObj:SetFontSize(46)
+        titleObj:SetColor(1, 1, 1, 1)
+        titleObj:SetDropShadowEnabled(true)
+        titleObj:SetText("Results")
+        titleObj:AlignTop()
+        titleObj:SetPosition(0, 146)
+        
+        -- Create results paragraph text
+        local resultsTextObj = CreateGUIObject("resultsTextObj", GUIParagraph, resultsRootObj)
+        resultsTextObj:SetFontFamily("MicrogrammaBold")
+        resultsTextObj:SetFontSize(30)
+        resultsTextObj:SetColor(1, 1, 1, 1)
+        resultsTextObj:SetDropShadowEnabled(true)
+        resultsTextObj:SetJustification(GUIItem.Align_Min)
+        resultsTextObj:AlignTop()
+        resultsTextObj:SetPosition(0, 256)
+        resultsRootObj.resultsTextObj = resultsTextObj
+        
+    end
+    
+    local resultsStr = string.format("Minimum FPS: %.1f\nMaximum FPS: %.1f\nAverage FPS: %.1f", resultsTbl.minFPS, resultsTbl.maxFPS, resultsTbl.avgFPS)
+    local resultsLineList = string.Explode(resultsStr, "\n")
+    for i=1, #resultsLineList do
+        Log(resultsLineList[i])
+    end
+    
+    local resultsTextObj = resultsRootObj.resultsTextObj
+    resultsTextObj:SetText(resultsStr)
+
+end
+
+
+function Benchmark_DestroyResults()
+
+    if resultsRootObj == nil then
+        return
+    end
+    
+    resultsRootObj:Destroy()
+    resultsRootObj = nil
+
 end
 
 local function SetupPlaybackBar()
@@ -702,9 +822,17 @@ end
 Event.Hook("UpdateRender", function()
     
     if Benchmark_GetIsRecording() then
-        Benchmark_RecordFrame(GetTimeForBenchmark() - recordingStartTime)
+        Benchmark_RecordFrame(Benchmark_GetTime() - recordingStartTime)
     end
     
+    if Benchmark_GetIsPlaying() then
+        if Buffer_GetIsPlaybackAtEnd() then
+            Benchmark_StopPlaying()
+            Benchmark_DisplayResults()
+        else
+            BenchmarkData_RecordFrameTimeDelta()
+        end
+    end
 end)
 
 Event.Hook("LoadComplete", function()
