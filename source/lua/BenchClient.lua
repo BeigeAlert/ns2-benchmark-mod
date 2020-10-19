@@ -85,6 +85,39 @@ Event.Hook("Console_bench_stop", function()
     
 end)
 
+Log("Added console command \"bench_list\"")
+Event.Hook("Console_bench_list", function()
+    
+    local localList, vanillaList = Benchmark_GetListsOfRecordingNames()
+    if #localList == 0 and #vanillaList == 0 then
+        Log("Found 0 recordings. :( ")
+        return
+    end
+    
+    local total = #localList + #vanillaList
+    
+    Log("Found %s recordings (%s local, %s vanilla)", total, #localList, #vanillaList)
+    for i=1, #localList do
+        Log("    %%appdata%%/Natural Selection 2/%s", localList[i])
+    end
+    for i=1, #vanillaList do
+        Log("    <ns2 install>/ns2/%s", vanillaList[i])
+    end
+    
+end)
+
+function Benchmark_GetListsOfRecordingNames()
+    
+    local appDataRecordings = {}
+    Shared.GetMatchingFileNames(string.format("config://*%s", kBenchmarkFileExt), true, appDataRecordings)
+    
+    local vanillaRecordings = {}
+    Shared.GetMatchingFileNames(string.format("benchmarks/*%s", kBenchmarkFileExt), true, vanillaRecordings)
+    
+    return appDataRecordings, vanillaRecordings
+
+end
+
 function Benchmark_GetIsRecording()
     return benchmarkStatus == "recording"
 end
@@ -450,7 +483,7 @@ function Benchmark_LoadRecording(fileName)
     end
     
     -- Try to load from a special game directory (eg for benchmarks that ship with the game).
-    local realFileName = "benchmarks/"..fileName..kBenchmarkFileExt
+    local realFileName = "game://benchmarks/"..fileName..kBenchmarkFileExt
     if not GetFileExists(realFileName) then
         realFileName = "config://"..fileName..kBenchmarkFileExt
         if not GetFileExists(realFileName) then
