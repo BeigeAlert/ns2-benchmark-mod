@@ -1,7 +1,12 @@
 name        = "Benchmark Mod"
-source_dir  = "source/"
-output_dir  = "output/"
-description = [=[Benchmark Mod]=]
+source_dir  = "source"
+output_dir  = "output"
+description = [=[Useful for creating repeatable camera movements through a map, and gathering FPS statistics to see how performance is impacted by changes.
+
+This is a client-only mod.  Shouldn't be used on any server.
+
+https://github.com/BeigeAlert/ns2-benchmark-mod]=]
 image       = "preview.jpg"
 tag_modtype = "Tool"
 tag_support = ""
+publish_id = "86d1a83f"

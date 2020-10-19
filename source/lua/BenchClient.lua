@@ -106,6 +106,13 @@ Event.Hook("Console_bench_list", function()
     
 end)
 
+Log("Added console command \"bench_counter\"")
+Event.Hook("Console_bench_counter", function()
+    
+    Benchmark_ToggleFPSCounter()
+    
+end)
+
 local benchmarkData = {}
 benchmarkData.minFPS = 99999
 benchmarkData.maxFPS = 0
@@ -181,6 +188,8 @@ function Benchmark_GetIsPlaying()
 end
 
 local buffer = {}
+buffer.currentRecordingIndex = 0
+buffer.currentPlaybackIndex = 0
 local function Buffer_Clear()
     buffer = {}
     buffer.currentRecordingIndex = 0 -- last index written (if playing back, this is the size)
@@ -797,6 +806,58 @@ function Benchmark_DestroyResults()
 
 end
 
+local instantFPSCounterObj = nil
+function Benchmark_CreateFPSCounter()
+    
+    if instantFPSCounterObj ~= nil then
+        return
+    end
+    
+    instantFPSCounterObj = CreateGUIObject("instantFPSCounter", GUIText, nil)
+    instantFPSCounterObj:SetFontFamily("Arial")
+    instantFPSCounterObj:SetFontSize(12)
+    instantFPSCounterObj:AlignTopLeft()
+    instantFPSCounterObj:SetPosition(8, 32)
+    instantFPSCounterObj:SetDropShadowEnabled(true)
+    instantFPSCounterObj:SetColor(1, 1, 1, 1)
+    
+end
+
+function Benchmark_DestroyFPSCounter()
+    
+    if instantFPSCounterObj == nil then
+        return
+    end
+    
+    instantFPSCounterObj:Destroy()
+    instantFPSCounterObj = nil
+    
+end
+
+function Benchmark_ToggleFPSCounter()
+    
+    if instantFPSCounterObj == nil then
+        Benchmark_CreateFPSCounter()
+    else
+        Benchmark_DestroyFPSCounter()
+    end
+    
+end
+
+local lastTime = Benchmark_GetTime()
+function Benchmark_UpdateFPSCounter()
+    
+    local now = Benchmark_GetTime()
+    local deltaTime = now - lastTime
+    local fps = 1.0 / deltaTime
+    lastTime = now
+    
+    if instantFPSCounterObj then
+        instantFPSCounterObj:SetText(string.format("%.1f", fps))
+    end
+    
+end
+
 local function SetupPlaybackBar()
     
     -- Set it up so the playback bar will be created when we start playback, and destroyed when we
@@ -833,6 +894,9 @@ Event.Hook("UpdateRender", function()
             BenchmarkData_RecordFrameTimeDelta()
         end
     end
+    
+    Benchmark_UpdateFPSCounter()
+    
 end)
 
 Event.Hook("LoadComplete", function()
